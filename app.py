@@ -1,14 +1,18 @@
 import os
 import json
-import gradio as gr
 
+import gradio as gr
+import uvicorn
+
+from fastapi import FastAPI
+from pydantic import BaseModel
 from huggingface_hub import InferenceClient
 from ddgs import DDGS
 
 
-# -------------------------
+# ==========================================
 # KI
-# -------------------------
+# ==========================================
 
 HF_TOKEN = os.environ.get("HF_TOKEN")
 
@@ -20,9 +24,9 @@ client = InferenceClient(
 MODEL = "openai/gpt-oss-120b"
 
 
-# -------------------------
-# EINFACHES MEMORY
-# -------------------------
+# ==========================================
+# MEMORY
+# ==========================================
 
 memory = []
 
@@ -39,9 +43,9 @@ def zeige_memory():
     return "\n".join(memory)
 
 
-# -------------------------
+# ==========================================
 # RECHNER
-# -------------------------
+# ==========================================
 
 def rechner(a, b, operation):
 
@@ -63,9 +67,9 @@ def rechner(a, b, operation):
     return "Unbekannte Operation."
 
 
-# -------------------------
+# ==========================================
 # INTERNET
-# -------------------------
+# ==========================================
 
 def internet_suche(suchbegriff):
 
@@ -87,11 +91,12 @@ def internet_suche(suchbegriff):
     return text
 
 
-# -------------------------
+# ==========================================
 # TOOLS
-# -------------------------
+# ==========================================
 
 tools = [
+
     {
         "type": "function",
         "function": {
@@ -142,7 +147,7 @@ tools = [
         "type": "function",
         "function": {
             "name": "merke",
-            "description": "Speichert eine Information im Gedächtnis.",
+            "description": "Speichert eine Information.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -157,7 +162,7 @@ tools = [
         "type": "function",
         "function": {
             "name": "zeige_memory",
-            "description": "Liest die gespeicherten Erinnerungen.",
+            "description": "Liest gespeicherte Erinnerungen.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -167,54 +172,38 @@ tools = [
 ]
 
 
-# -------------------------
+# ==========================================
 # AGENT
-# -------------------------
+# ==========================================
 
-def agent(frage, history):
+def agent(frage):
 
     messages = [
         {
             "role": "system",
             "content": """
-Du bist ein hilfreicher persönlicher AI-Agent.
+Du bist Nova, ein persönlicher AI-Agent.
 
 Antworte auf Deutsch.
 
 Du kannst:
+- Fragen beantworten
 - rechnen
-- das Internet durchsuchen
+- aktuelle Informationen im Internet suchen
 - Informationen speichern
 - gespeicherte Informationen abrufen
 
 Nutze deine Werkzeuge selbstständig.
-Für aktuelle Informationen verwende die Internetsuche.
+Für aktuelle Informationen sollst du die Internetsuche benutzen.
 """
+        },
+
+        {
+            "role": "user",
+            "content": frage
         }
     ]
 
-    # Chatverlauf übernehmen
-
-    if history:
-        for eintrag in history:
-
-            if isinstance(eintrag, dict):
-                role = eintrag.get("role")
-                content = eintrag.get("content")
-
-                if role in ["user", "assistant"] and content:
-                    messages.append({
-                        "role": role,
-                        "content": str(content)
-                    })
-
-    messages.append({
-        "role": "user",
-        "content": frage
-    })
-
-
-    # Maximal 5 Agent-Schritte
 
     for schritt in range(5):
 
@@ -277,26 +266,72 @@ Für aktuelle Informationen verwende die Internetsuche.
         messages.append({
             "role": "assistant",
             "content":
-                f"Ergebnis des Werkzeugs {tool_name}:\n{ergebnis}"
+                f"Ergebnis von {tool_name}:\n{ergebnis}"
         })
 
 
     return "Ich konnte die Aufgabe nicht vollständig abschließen."
 
 
-# -------------------------
-# OBERFLÄCHE
-# -------------------------
+# ==========================================
+# API FÜR DIE ANDROID-APP
+# ==========================================
+
+app = FastAPI()
+
+
+class ChatRequest(BaseModel):
+    message: str
+
+
+@app.post("/api/chat")
+def chat_api(request: ChatRequest):
+
+    try:
+
+        antwort = agent(request.message)
+
+        return {
+            "reply": antwort
+        }
+
+    except Exception as fehler:
+
+        return {
+            "reply": f"Fehler: {str(fehler)}"
+        }
+
+
+# ==========================================
+# WEB-OBERFLÄCHE
+# ==========================================
+
+def web_chat(message, history):
+
+    try:
+        return agent(message)
+
+    except Exception as fehler:
+        return f"Fehler: {fehler}"
+
 
 demo = gr.ChatInterface(
-    fn=agent,
-    title="🤖 Mein AI-Agent",
-    description=(
-        "Mein persönlicher AI-Agent mit "
-        "Internetsuche, Rechner und Memory."
-    )
+    fn=web_chat,
+    title="🤖 Nova",
+    description="Mein persönlicher AI-Agent"
 )
 
+
+app = gr.mount_gradio_app(
+    app,
+    demo,
+    path="/"
+)
+
+
+# ==========================================
+# START
+# ==========================================
 
 if __name__ == "__main__":
 
@@ -304,7 +339,8 @@ if __name__ == "__main__":
         os.environ.get("PORT", 7860)
     )
 
-    demo.launch(
-        server_name="0.0.0.0",
-        server_port=port
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=port
     )
